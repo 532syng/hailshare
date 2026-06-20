@@ -7,24 +7,6 @@ from typing import Optional, List, Dict, Tuple
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-from flask import Flask
-from threading import Thread
-import time
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot is alive!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
-
-def keep_alive():
-    t = Thread(target=run_flask, daemon=True)
-    t.daemon = True
-    t.start()
-    time.sleep(1)  # Give Flask time to start
 
 # =========================
 # Quick setup
@@ -350,13 +332,6 @@ db = DB(DB_PATH)
 def parse_meetup_dt(date_str: str, time_str: str) -> datetime:
     # input local UTC+7
     dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-    # if dt.minute % 5 != 0:
-    #     raise ValueError("Time must be in 5-minute intervals.")
-    # # Round up to next 5-minute interval (if already aligned, keep as-is)
-    # remainder = dt.minute % 5
-    # if remainder != 0:
-    #     dt += timedelta(minutes=(5 - remainder))
-    #     dt = dt.replace(second=0, microsecond=0)
     return dt.replace(tzinfo=TZ)
 
 
@@ -416,13 +391,10 @@ async def user_eligible_for_channel(guild: discord.Guild, user_id: int) -> bool:
 
     if has_active_discord:
         return False
-    # Reconcile stale DB state: DB says active, Discord says not active
     elif has_active_db:
-        db.clear_active_channel_membership(user_id)  # new DB method (below)
+        db.clear_active_channel_membership(user_id)
         has_active_db = False
 
-    # if has_active_db:
-    #     return False
     return True
 
 
@@ -432,7 +404,7 @@ async def user_eligible_for_channel(guild: discord.Guild, user_id: int) -> bool:
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
-intents.message_content = True  #not strictly needed, but it might be required for the on_ready() to fire properly.
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -594,7 +566,6 @@ async def leave_cmd(interaction: discord.Interaction):
     guild = interaction.guild
     user = interaction.user
 
-    # optional short lock to avoid race with matching tasks
     if not db.try_acquire_lock("matching_engine", ttl_seconds=10):
         await interaction.response.send_message("System is busy, please retry in a few seconds.", ephemeral=True)
         return
@@ -605,13 +576,9 @@ async def leave_cmd(interaction: discord.Interaction):
         return
 
     try:
-        # remove Discord access
         await ch.set_permissions(user, overwrite=None, reason="User used /leave")
-
-        # recompute current members after permission update
         final_members = [m.id for m in ch.members]
 
-        # update DB channel membership incrementally + update event
         meetup = parse_channel_meetup(ch.name)
         route = db.get_channel_route(ch.id)
         route_from = route[0] if route else None
@@ -645,7 +612,6 @@ async def cleanup_task():
         if not meetup:
             continue
         if meetup + timedelta(minutes=MAX_BUFFER) < now:
-            # optional: delete expired channels
             try:
                 await ch.delete(reason="hailshare expired channel cleanup")
             except Exception:
@@ -676,7 +642,6 @@ async def fill_existing_channels_task():
 
         route = db.get_channel_route(ch.id)
         if route is None:
-            # try infer from existing channel members' matched requests
             inferred = None
             for m in members:
                 rr = db.conn.execute(
@@ -698,7 +663,6 @@ async def fill_existing_channels_task():
             continue
 
         route_from, route_to = route
-
         candidates = db.list_current_requests()
         existing_ids = {m.id for m in members}
         selected = None
@@ -764,7 +728,6 @@ async def create_channels_task():
         route_key = (r["from_location"], r["to_location"])
         groups.setdefault(route_key, []).append(r)
 
-    # remove duplicate sort and dead i assignment
     for key, rows in groups.items():
         if len(rows) < 3:
             continue
@@ -843,13 +806,12 @@ async def create_channels_task():
                     f"- Median time: {median_dt.strftime('%H:%M')} (UTC+7)\n"
                     f"- From: {trio[0]['from_location']}\n"
                     f"- To: {trio[0]['to_location']}\n"
-                    "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decided not to proceed, use /leave to leave this channel.\n"
+                    "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decide to cancel, use /leave_trio.\n"
                     f"\nThis channel will be active until {MAX_BUFFER} minutes after the meetup time. After that, it may be deleted or archived.\n"
                 )
                 await ch.send(greeting)
         
-                max_buf = max(int(x["buffer_minutes"]) for x in trio)
-                db.upsert_channel(ch.id, ch.name, median_dt, max_buffer_minutes=max_buf)
+                db.upsert_channel(ch.id, ch.name, median_dt, route_from=trio[0]['from_location'], route_to=trio[0]['to_location'])
                 db.replace_channel_members(ch.id, user_ids)
                 db.add_channel_event(ch.id, "create", user_ids)
         
@@ -858,13 +820,11 @@ async def create_channels_task():
         
                 used.update({i, j, k})
         
-            except Exception:
+            except Exception as e:
+                print(f"Error creating channel: {e}")
                 continue
 
-@bot.event
-async def on_connect():
-    print("=== on_connect() FIRED ===")
-    
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} ({bot.user.id})")
@@ -875,7 +835,7 @@ async def on_ready():
             print(f"Synced slash commands to guild {GUILD_ID}")
         except Exception as e:
             print("Sync error:", e)
-            
+
     if not cleanup_task.is_running():
         cleanup_task.start()
     if not fill_existing_channels_task.is_running():
@@ -885,5 +845,4 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    keep_alive()
     bot.run(BOT_TOKEN)
