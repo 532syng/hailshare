@@ -429,6 +429,7 @@ async def user_eligible_for_channel(guild: discord.Guild, user_id: int) -> bool:
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
+intents.message_content = True  #not strictly needed, but it might be required for the on_ready() to fire properly.
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
