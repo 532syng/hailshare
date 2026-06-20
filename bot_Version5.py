@@ -43,7 +43,6 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "YOUR_BOT_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))  # required
 HAILSHARE_CATEGORY_ID = int(os.getenv("HAILSHARE_CATEGORY_ID", "0"))  # recommended
 DB_PATH = os.getenv("HAILSHARE_DB_PATH", "hailshare.db")
-print("GUILD_ID:",GUILD_ID)
 
 CHANNEL_PREFIX = "trio-"
 TZ = timezone(timedelta(hours=7))  # UTC+7
@@ -862,7 +861,10 @@ async def create_channels_task():
             except Exception:
                 continue
 
-
+@bot.event
+async def on_connect():
+    print("=== on_connect() FIRED ===")
+    
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} ({bot.user.id})")
