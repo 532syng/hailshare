@@ -429,6 +429,7 @@ async def user_eligible_for_channel(guild: discord.Guild, user_id: int) -> bool:
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
+intents.message_content = True  # Enable message content intent
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
