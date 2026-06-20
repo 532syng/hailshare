@@ -4,12 +4,29 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Tuple
 from threading import Thread
-import socket
+#import socket
 
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+‎from flask import Flask
+import time
 
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+
+def keep_alive():
+    t = Thread(target=run_flask, daemon=True)
+    t.daemon = True
+    t.start()
+    time.sleep(1)  # Give Flask time to start
+    
 # =========================
 # Quick setup
 # pip install -U discord.py
@@ -403,26 +420,26 @@ async def user_eligible_for_channel(guild: discord.Guild, user_id: int) -> bool:
 # =========================
 # HEALTH CHECK SERVER
 # =========================
-def start_health_check():
-    """Simple TCP health check on port 8080 - keeps Render from spinning down"""
-    def run_server():
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.bind(('0.0.0.0', 8080))
-            sock.listen(1)
-            while True:
-                try:
-                    conn, addr = sock.accept()
-                    conn.send(b'HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nAlive')
-                    conn.close()
-                except:
-                    pass
-        except Exception as e:
-            print(f"Health check error: {e}")
-    
-    thread = Thread(target=run_server, daemon=True)
-    thread.start()
+#def start_health_check():
+#    """Simple TCP health check on port 8080 - keeps Render from spinning down"""
+#    def run_server():
+#        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+#        try:
+#            sock.bind(('0.0.0.0', 8080))
+#            sock.listen(1)
+#            while True:
+#                try:
+#                    conn, addr = sock.accept()
+#                    conn.send(b'HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nAlive')
+#                    conn.close()
+#                except:
+#                    pass
+#        except Exception as e:
+#            print(f"Health check error: {e}")
+#    
+#    thread = Thread(target=run_server, daemon=True)
+#    thread.start()
 
 
 # =========================
@@ -869,8 +886,9 @@ async def on_ready():
         fill_existing_channels_task.start()
     if not create_channels_task.is_running():
         create_channels_task.start()
+    keep_alive()
 
 
 if __name__ == "__main__":
-    start_health_check()
+    #start_health_check()
     bot.run(BOT_TOKEN)
