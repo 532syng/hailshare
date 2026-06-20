@@ -9,6 +9,7 @@ from discord.ext import commands, tasks
 from discord import app_commands
 from flask import Flask
 from threading import Thread
+import time
 
 app = Flask('')
 
@@ -16,12 +17,14 @@ app = Flask('')
 def home():
     return "Bot is alive!"
 
-def run():
-    app.run(host='0.0.0.0', port=8080)
+def run_flask():
+    app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
 def keep_alive():
-    t = Thread(target=run)
+    t = Thread(target=run_flask, daemon=True)
+    t.daemon = True
     t.start()
+    time.sleep(1)  # Give Flask time to start
 
 # =========================
 # Quick setup
