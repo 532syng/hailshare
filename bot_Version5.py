@@ -9,7 +9,7 @@ from threading import Thread
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-‎from flask import Flask
+from flask import Flask
 import time
 
 app = Flask('')
