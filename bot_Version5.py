@@ -3,6 +3,8 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Tuple
+from threading import Thread
+import socket
 
 import discord
 from discord.ext import commands, tasks
@@ -396,6 +398,31 @@ async def user_eligible_for_channel(guild: discord.Guild, user_id: int) -> bool:
         has_active_db = False
 
     return True
+
+
+# =========================
+# HEALTH CHECK SERVER
+# =========================
+def start_health_check():
+    """Simple TCP health check on port 8080 - keeps Render from spinning down"""
+    def run_server():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(('0.0.0.0', 8080))
+            sock.listen(1)
+            while True:
+                try:
+                    conn, addr = sock.accept()
+                    conn.send(b'HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nAlive')
+                    conn.close()
+                except:
+                    pass
+        except Exception as e:
+            print(f"Health check error: {e}")
+    
+    thread = Thread(target=run_server, daemon=True)
+    thread.start()
 
 
 # =========================
@@ -845,4 +872,5 @@ async def on_ready():
 
 
 if __name__ == "__main__":
+    start_health_check()
     bot.run(BOT_TOKEN)
