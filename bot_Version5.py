@@ -875,7 +875,8 @@ async def on_ready():
             print(f"Synced slash commands to guild {GUILD_ID}")
         except Exception as e:
             print("Sync error:", e)
-
+            
+    keep_alive()
     if not cleanup_task.is_running():
         cleanup_task.start()
     if not fill_existing_channels_task.is_running():
@@ -885,5 +886,4 @@ async def on_ready():
 
 
 if __name__ == "__main__":
-    keep_alive()
     bot.run(BOT_TOKEN)
