@@ -1116,6 +1116,49 @@ async def create_channels_task():
             groups.setdefault(route_key, []).append(r)
 
         for key, rows in groups.items():
+            # test version
+            if len(rows) >= 1:
+                # Just use the first user for testing
+                a = rows[0]
+                user_ids = [int(a["user_id"])]
+                
+                members = [guild.get_member(uid) for uid in user_ids]
+                if any(m is None for m in members):
+                    continue
+                
+                # Use a mock meetup time
+                median_dt = datetime.fromisoformat(a["meetup_dt"])
+                
+                # Create channel with just 1 user
+                channel_name = build_channel_name(median_dt) + "-test"
+                overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+                for m in members:
+                    overwrites[m] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, read_message_history=True
+                    )
+                try:
+                    ch = await guild.create_text_channel(
+                        name=channel_name,
+                        category=category if isinstance(category, discord.CategoryChannel) else None,
+                        overwrites=overwrites,
+                        reason="hailshare matched trio with per-user buffer"
+                    )
+            
+                    greeting = (
+                        "🚕 **Hailshare matched!**\n"
+                        f"- Request date: {median_dt.strftime('%Y-%m-%d')}\n"
+                        f"- Median time: {median_dt.strftime('%H:%M')} (UTC+7)\n"
+                        f"- From: {trio[0]['from_location']}\n"
+                        f"- To: {trio[0]['to_location']}\n"
+                        "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decide to cancel, use /leave_trio.\n"
+                        f"\nThis channel will be active until {MAX_BUFFER} minutes after the meetup time. After that, it may be deleted or archived.\n"
+                    )
+                    await ch.send(greeting)
+                    for x in user_ids:
+                        db.set_matched(x["id"])
+                except Exception as e:
+                    print(f"Error creating channel: {e}")
+                    continue
             if len(rows) < 3:
                 continue
             rows = sorted(rows, key=lambda x: x["created_at"])
