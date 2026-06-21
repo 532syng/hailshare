@@ -1,7 +1,7 @@
 This project implements a Discord bot (Python + SQLite) for one specific server, using UTC+7 time. Hailshare requests are grouped with any same route requests within meetup time +/- buffer minutes. A private channel is created for the trio for communication until 90 minutes after request meetup time.
 
 ## What it does
-Provides slash commands:
+Provides slash commands and prefix (!) commands:
 -  **/request**: submit a hailshare request with date, time, from/to location, and buffer (15/30/60/90 mins). 
 -  **/my_request**: show your current request and optionally cancel it.
 -  **/leave_trio**: give up matched group and request.
