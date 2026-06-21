@@ -54,11 +54,11 @@ LOCATIONS = [
     "palace",
     "bitexco",
     "tasco",
-    "VNG campus",
-    "nova gallery",
-    "pink church",
+    "VNG-campus",
+    "nova-gallery",
+    "pink-church",
     "cathedral",
-    "galaxy innovation park"
+    "galaxy-innovation-park"
 ]
 LOCATION_SET = set(LOCATIONS)
 
@@ -418,31 +418,6 @@ async def user_eligible_for_channel(guild: discord.Guild, user_id: int) -> bool:
 
 
 # =========================
-# HEALTH CHECK SERVER
-# =========================
-#def start_health_check():
-#    """Simple TCP health check on port 8080 - keeps Render from spinning down"""
-#    def run_server():
-#        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-#        try:
-#            sock.bind(('0.0.0.0', 8080))
-#            sock.listen(1)
-#            while True:
-#                try:
-#                    conn, addr = sock.accept()
-#                    conn.send(b'HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nAlive')
-#                    conn.close()
-#                except:
-#                    pass
-#        except Exception as e:
-#            print(f"Health check error: {e}")
-#    
-#    thread = Thread(target=run_server, daemon=True)
-#    thread.start()
-
-
-# =========================
 # BOT
 # =========================
 intents = discord.Intents.default()
@@ -583,48 +558,297 @@ async def request_cmd(
 
 # test ! prefix commands
 @bot.command(name='request')
-async def request_cmd(ctx, meetup_date: str, meetup_time: str, from_location: str, to_location: str, buffer: int):
-    """Submit a hailshare request: !request YYYY-MM-DD HH:MM from_location to_location buffer"""
+async def request_cmd(ctx, meetup_date: str = None, meetup_time: str = None, 
+                      from_location: str = None, to_location: str = None, 
+                      buffer: int = None):
+    """
+    Submit a hailshare request.
     
-    if ctx.guild is None or ctx.guild.id != GUILD_ID:
-        await ctx.send("Use this command in the target server only.")
+    Usage: !request YYYY-MM-DD HH:MM from_location to_location buffer
+    
+    Examples:
+      !request 2026-06-25 14:30 airport market 60
+      !request 2026-06-25 09:00 vng-campus palace 30
+      !request 2026-06-25 14:30 galaxy-innovation-park airport 60
+      !request  - Show this help message
+    
+    Valid locations:
+      airport, market, palace, bitexco, tasco, vng-campus, 
+      nova-gallery, pink-church, cathedral, galaxy-innovation-park
+    
+    You can use just the first word of any location:
+      vng → vng-campus, galaxy → galaxy-innovation-park, nova → nova-gallery, etc.
+    
+    Valid buffers: 15, 30, 60, 90 minutes
+    """
+    
+    # --- HELP COMMAND (triggered by no parameters or explicit help) ---
+    if meetup_date is None or meetup_date.lower() in ['help', 'h', '?']:
+        help_embed = discord.Embed(
+            title="📋 HailShare Request Command",
+            description="Submit a new ride-sharing request",
+            color=discord.Color.blue()
+        )
+        help_embed.add_field(
+            name="🔧 Usage",
+            value="`!request YYYY-MM-DD HH:MM from_location to_location buffer`",
+            inline=False
+        )
+        help_embed.add_field(
+            name="📝 Examples",
+            value="`!request 2026-06-25 14:30 airport market 60`\n"
+                  "`!request 2026-06-25 09:00 vng-campus palace 30`\n"
+                  "`!request 2026-06-25 14:30 galaxy-innovation-park airport 60`",
+            inline=False
+        )
+        
+        # --- FULL LOCATION LIST (already hyphenated) ---
+        location_list = []
+        for loc in sorted(LOCATION_SET):
+            # Get first word as shortcut (before the hyphen)
+            first_word = loc.split('-')[0] if '-' in loc else loc
+            if first_word != loc:
+                location_list.append(f"• `{loc}` (or `{first_word}`)")
+            else:
+                location_list.append(f"• `{loc}`")
+        
+        help_embed.add_field(
+            name="📍 Valid Locations",
+            value="\n".join(location_list),
+            inline=True
+        )
+        
+        help_embed.add_field(
+            name="⏰ Valid Buffers",
+            value=", ".join([f"`{b}` min" for b in BUFFER_CHOICES]),
+            inline=True
+        )
+        help_embed.add_field(
+            name="📅 Date Format",
+            value="`YYYY-MM-DD` (UTC+7)",
+            inline=True
+        )
+        help_embed.add_field(
+            name="⏱️ Time Format",
+            value="`HH:MM` in 5-minute intervals (UTC+7)",
+            inline=True
+        )
+        help_embed.add_field(
+            name="💡 Shortcuts",
+            value="You can use just the first word:\n"
+                  "• `vng` → vng-campus\n"
+                  "• `galaxy` → galaxy-innovation-park\n"
+                  "• `nova` → nova-gallery\n"
+                  "• `pink` → pink-church",
+            inline=True
+        )
+        help_embed.set_footer(text="Example: !request 2026-06-25 14:30 airport market 60")
+        await ctx.send(embed=help_embed)
         return
 
-    if from_location not in LOCATION_SET or to_location not in LOCATION_SET:
-        await ctx.send("Invalid location choice.")
+    # --- MATCH LOCATION FROM PREFIX ---
+    def match_location(input_str: str) -> str:
+        """Match a location from user input (full name or prefix)"""
+        input_lower = input_str.strip().lower()
+        
+        # First, check exact match
+        if input_lower in LOCATION_SET:
+            return input_lower
+        
+        # Check if input matches the first word of any location
+        matches = []
+        for loc in LOCATION_SET:
+            # Get first word (before the hyphen) or the whole thing if no hyphen
+            first_word = loc.split('-')[0]
+            if input_lower == first_word or loc.startswith(input_lower):
+                matches.append(loc)
+        
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) > 1:
+            # Multiple matches - ambiguous
+            return None  # Will be handled as "ambiguous"
+        
+        # No match found
+        return None
+
+    # --- MATCH FROM_LOCATION ---
+    matched_from = match_location(from_location)
+    if matched_from is None:
+        # Check if it was ambiguous
+        matches = []
+        input_lower = from_location.strip().lower()
+        for loc in LOCATION_SET:
+            first_word = loc.split('-')[0]
+            if input_lower == first_word or loc.startswith(input_lower):
+                matches.append(loc)
+        
+        if len(matches) > 1:
+            await ctx.send(
+                f"❌ Ambiguous location: `{from_location}` matched multiple locations.\n"
+                f"Did you mean one of these? `{', '.join(sorted(matches))}`\n"
+                f"Please be more specific."
+            )
+            return
+        else:
+            await ctx.send(
+                f"❌ Invalid from_location: `{from_location}`\n"
+                f"Valid locations: `{', '.join(sorted(LOCATION_SET))}`\n"
+                f"Tip: You can use the first word (e.g., `vng` for `vng-campus`)"
+            )
+            return
+    from_location = matched_from
+
+    # --- MATCH TO_LOCATION ---
+    matched_to = match_location(to_location)
+    if matched_to is None:
+        # Check if it was ambiguous
+        matches = []
+        input_lower = to_location.strip().lower()
+        for loc in LOCATION_SET:
+            first_word = loc.split('-')[0]
+            if input_lower == first_word or loc.startswith(input_lower):
+                matches.append(loc)
+        
+        if len(matches) > 1:
+            await ctx.send(
+                f"❌ Ambiguous location: `{to_location}` matched multiple locations.\n"
+                f"Did you mean one of these? `{', '.join(sorted(matches))}`\n"
+                f"Please be more specific."
+            )
+            return
+        else:
+            await ctx.send(
+                f"❌ Invalid to_location: `{to_location}`\n"
+                f"Valid locations: `{', '.join(sorted(LOCATION_SET))}`\n"
+                f"Tip: You can use the first word (e.g., `galaxy` for `galaxy-innovation-park`)"
+            )
+            return
+    to_location = matched_to
+
+    # --- VALIDATE BUFFER ---
+    if buffer not in BUFFER_CHOICES:
+        await ctx.send(
+            f"❌ Invalid buffer value: `{buffer}`\n"
+            f"Valid buffers: `{', '.join([str(b) for b in BUFFER_CHOICES])}` minutes"
+        )
         return
 
+    # --- VALIDATE DATETIME ---
     try:
         meetup_dt = parse_meetup_dt(meetup_date, meetup_time)
     except ValueError as e:
-        await ctx.send(f"Invalid datetime: {e}")
+        await ctx.send(f"❌ Invalid datetime: {e}")
         return
 
-    prev = db.get_current_request_for_user(ctx.author.id)
-    if not prev:
-        db.insert_request(ctx.author.id, meetup_dt, from_location, to_location, buffer)
-        await ctx.send("Request submitted.")
+    # --- CHECK FOR PAST DATES ---
+    if meetup_dt < datetime.now(TZ):
+        await ctx.send(
+            f"❌ Meetup time cannot be in the past.\n"
+            f"Current time: {datetime.now(TZ).strftime('%Y-%m-%d %H:%M')} (UTC+7)"
+        )
         return
 
-    prev_dt = datetime.fromisoformat(prev["meetup_dt"])
-    if prev_dt < datetime.now(TZ):
-        db.cancel_request(prev["id"])
-        db.insert_request(ctx.author.id, meetup_dt, from_location, to_location, buffer)
-        await ctx.send("Previous request was in the past, cancelled automatically. New request submitted.")
+    # --- CHECK FOR FUTURE DATES (too far) ---
+    if meetup_dt > datetime.now(TZ) + timedelta(days=30):
+        await ctx.send(
+            f"❌ Meetup time cannot be more than 30 days in the future.\n"
+            f"Please choose a date within the next 30 days."
+        )
         return
 
-    # For prefix commands, you need a different approach for the "Replace" view
-    # We'll use a simple confirmation with reactions or a follow-up message
-    view = ReplaceView(
-        user_id=ctx.author.id,
-        payload={
-            "meetup_dt": meetup_dt,
-            "from_location": from_location,
-            "to_location": to_location,
-            "buffer_minutes": buffer,
-        }
-    )
-    await ctx.send("You already have a hailshare request. Replace it?", view=view)
+    # --- ACQUIRE LOCK ---
+    if not db.try_acquire_lock("matching_engine", ttl_seconds=10):
+        await ctx.send("⏳ System is busy, please retry in a few seconds.")
+        return
+
+    # --- CHECK EXISTING REQUEST ---
+    try:
+        prev = db.get_current_request_for_user(ctx.author.id)
+        
+        if not prev:
+            db.insert_request(
+                ctx.author.id, 
+                meetup_dt, 
+                from_location, 
+                to_location, 
+                buffer
+            )
+            await ctx.send(
+                f"✅ Request submitted!\n"
+                f"📅 {meetup_dt.strftime('%Y-%m-%d %H:%M')} (UTC+7)\n"
+                f"📍 {from_location} → {to_location}\n"
+                f"⏰ Buffer: {buffer} minutes"
+            )
+            return
+
+        # --- HANDLE EXISTING REQUEST ---
+        prev_dt = datetime.fromisoformat(prev["meetup_dt"])
+        
+        if prev_dt < datetime.now(TZ):
+            db.cancel_request(prev["id"])
+            db.insert_request(
+                ctx.author.id, 
+                meetup_dt, 
+                from_location, 
+                to_location, 
+                buffer
+            )
+            await ctx.send(
+                f"✅ Previous request was in the past, cancelled automatically.\n"
+                f"New request submitted!\n"
+                f"📅 {meetup_dt.strftime('%Y-%m-%d %H:%M')} (UTC+7)\n"
+                f"📍 {from_location} → {to_location}\n"
+                f"⏰ Buffer: {buffer} minutes"
+            )
+            return
+
+        # --- REPLACE VIEW (for existing active request) ---
+        view = ReplaceView(
+            user_id=ctx.author.id,
+            payload={
+                "meetup_dt": meetup_dt,
+                "from_location": from_location,
+                "to_location": to_location,
+                "buffer_minutes": buffer,
+            }
+        )
+        
+        # Show existing request info
+        existing_time = prev_dt.strftime('%Y-%m-%d %H:%M')
+        existing_from = prev["from_location"]
+        existing_to = prev["to_location"]
+        existing_buffer = prev["buffer_minutes"]
+        
+        embed = discord.Embed(
+            title="⚠️ Existing Request Found",
+            description="You already have an active request. Replace it?",
+            color=discord.Color.orange()
+        )
+        embed.add_field(
+            name="📅 Current Request",
+            value=f"**Time:** {existing_time} (UTC+7)\n"
+                  f"**Route:** {existing_from} → {existing_to}\n"
+                  f"**Buffer:** {existing_buffer} minutes",
+            inline=False
+        )
+        embed.add_field(
+            name="🔄 New Request",
+            value=f"**Time:** {meetup_dt.strftime('%Y-%m-%d %H:%M')} (UTC+7)\n"
+                  f"**Route:** {from_location} → {to_location}\n"
+                  f"**Buffer:** {buffer} minutes",
+            inline=False
+        )
+        embed.set_footer(text="Click Replace to update your request, or Cancel to keep the current one.")
+        
+        await ctx.send(embed=embed, view=view)
+
+    except Exception as e:
+        await ctx.send(f"❌ An error occurred while processing your request: {e}")
+        # Log the error for debugging
+        print(f"Error in request command: {e}")
+        import traceback
+        traceback.print_exc()
     
 @bot.command(name='my_request')
 async def my_request(ctx):
