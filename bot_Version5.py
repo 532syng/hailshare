@@ -581,7 +581,51 @@ async def request_cmd(
         ephemeral=True
     )
 
-# test ! prefix command
+# test ! prefix commands
+@bot.command(name='request')
+async def request_cmd(ctx, meetup_date: str, meetup_time: str, from_location: str, to_location: str, buffer: int):
+    """Submit a hailshare request: !request YYYY-MM-DD HH:MM from_location to_location buffer"""
+    
+    if ctx.guild is None or ctx.guild.id != GUILD_ID:
+        await ctx.send("Use this command in the target server only.")
+        return
+
+    if from_location not in LOCATION_SET or to_location not in LOCATION_SET:
+        await ctx.send("Invalid location choice.")
+        return
+
+    try:
+        meetup_dt = parse_meetup_dt(meetup_date, meetup_time)
+    except ValueError as e:
+        await ctx.send(f"Invalid datetime: {e}")
+        return
+
+    prev = db.get_current_request_for_user(ctx.author.id)
+    if not prev:
+        db.insert_request(ctx.author.id, meetup_dt, from_location, to_location, buffer)
+        await ctx.send("Request submitted.")
+        return
+
+    prev_dt = datetime.fromisoformat(prev["meetup_dt"])
+    if prev_dt < datetime.now(TZ):
+        db.cancel_request(prev["id"])
+        db.insert_request(ctx.author.id, meetup_dt, from_location, to_location, buffer)
+        await ctx.send("Previous request was in the past, cancelled automatically. New request submitted.")
+        return
+
+    # For prefix commands, you need a different approach for the "Replace" view
+    # We'll use a simple confirmation with reactions or a follow-up message
+    view = ReplaceView(
+        user_id=ctx.author.id,
+        payload={
+            "meetup_dt": meetup_dt,
+            "from_location": from_location,
+            "to_location": to_location,
+            "buffer_minutes": buffer,
+        }
+    )
+    await ctx.send("You already have a hailshare request. Replace it?", view=view)
+    
 @bot.command(name='my_request')
 async def my_request(ctx):
     if ctx.guild is None or ctx.guild.id != GUILD_ID:
@@ -610,23 +654,25 @@ async def my_request(interaction: discord.Interaction):
         ephemeral=True
     )
 
-
-@bot.tree.command(name="leave_trio", description="Leave your active trio private channel")
-async def leave_cmd(interaction: discord.Interaction):
-    if interaction.guild is None or interaction.guild.id != GUILD_ID:
-        await interaction.response.send_message("Use this command in the target server only.", ephemeral=True)
+# test hybrid command
+@bot.hybrid_command(name='leave_trio', description='Leave your active trio private channel')
+async def leave_cmd(ctx: commands.Context):
+    """Leave your active trio private channel"""
+    
+    if ctx.guild is None or ctx.guild.id != GUILD_ID:
+        await ctx.send("Use this command in the target server only.")
         return
 
-    guild = interaction.guild
-    user = interaction.user
+    guild = ctx.guild
+    user = ctx.author
 
     if not db.try_acquire_lock("matching_engine", ttl_seconds=10):
-        await interaction.response.send_message("System is busy, please retry in a few seconds.", ephemeral=True)
+        await ctx.send("System is busy, please retry in a few seconds.")
         return
 
     ch = await find_user_active_trio_channel(guild, user.id)
     if not ch:
-        await interaction.response.send_message("You are not in an active trio channel.", ephemeral=True)
+        await ctx.send("You are not in an active trio channel.")
         return
 
     try:
@@ -644,10 +690,10 @@ async def leave_cmd(interaction: discord.Interaction):
         db.sync_channel_members_incremental(ch.id, final_members)
         db.add_channel_event(ch.id, "update", final_members)
 
-        await interaction.response.send_message(f"You left {ch.mention}.", ephemeral=True)
+        await ctx.send(f"You left {ch.mention}.")
 
     except Exception as e:
-        await interaction.response.send_message(f"Failed to leave channel: {e}", ephemeral=True)
+        await ctx.send(f"Failed to leave channel: {e}")
 
 @tasks.loop(minutes=3)
 async def cleanup_task():
