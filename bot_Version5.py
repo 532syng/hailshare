@@ -1176,30 +1176,23 @@ async def create_channels_task():
                     continue
             
                 channel_name = build_channel_name(median_dt)
-                # ✅ FIX: Start with empty overwrites, let category handle default permissions
-                overwrites = {}
-                
-                # Only add custom overwrites for members
-                for m in members:
-                    overwrites[m] = discord.PermissionOverwrite(
-                        view_channel=True, 
-                        send_messages=True, 
-                        read_message_history=True
-                    )
-            
+                # Create channel with NO custom overwrites
                 try:
                     ch = await guild.create_text_channel(
                         name=channel_name,
                         category=category if isinstance(category, discord.CategoryChannel) else None,
-                        overwrites=overwrites,
                         reason="hailshare matched trio with per-user buffer"
                     )
+
+                    # Then add individual user permissions
+                    for m in members:
+                        await ch.set_permissions(
+                            m, 
+                            view_channel=True, 
+                            send_messages=True, 
+                            read_message_history=True
+                        )
                     
-                    # ✅ FIX: Explicitly sync permissions with category if it exists
-                    if category and isinstance(category, discord.CategoryChannel):
-                        await ch.permissions_sync()
-                        print(f"[DEBUG] Synced permissions with category for {ch.name}")
-            
                     greeting = (
                         "🚕 **Hailshare matched!**\n"
                         f"- Request date: {median_dt.strftime('%Y-%m-%d')}\n"
