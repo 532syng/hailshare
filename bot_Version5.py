@@ -58,7 +58,7 @@ LOCATIONS = [
     "palace",
     "bitexco",
     "tasco",
-    "VNG-campus",
+    "vng-campus",
     "nova-gallery",
     "pink-church",
     "cathedral",
@@ -980,6 +980,7 @@ async def leave_cmd(ctx: commands.Context):
 
 @tasks.loop(minutes=3)
 async def cleanup_task():
+    print("cleanup_task triggered")
     await bot.wait_until_ready()
     db.cancel_past_current_requests()
 
@@ -1003,6 +1004,7 @@ async def cleanup_task():
 
 @tasks.loop(minutes=1)
 async def fill_existing_channels_task():
+    print("fill_existing_channels_task triggered")
     await bot.wait_until_ready()
     if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
         return
@@ -1096,6 +1098,7 @@ async def fill_existing_channels_task():
 
 @tasks.loop(minutes=1)
 async def create_channels_task():
+    print("create_channels_task triggered")
     await bot.wait_until_ready()
     if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
         return
