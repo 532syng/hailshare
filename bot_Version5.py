@@ -977,34 +977,6 @@ async def leave_cmd(ctx: commands.Context):
     finally:
         db.release_lock("matching_engine")
 
-@bot.command(name='check_requests')
-async def check_requests(ctx):
-    """Check current requests in database"""
-    if ctx.author.id != os.getenv("YOUR_ADMIN_ID", "0"):
-        await ctx.send("❌ Admin only.")
-        return
-    
-    try:
-        current = db.list_current_requests()
-        if not current:
-            await ctx.send("📊 No current requests in database.")
-            return
-        
-        embed = discord.Embed(
-            title="📊 Current Requests",
-            color=discord.Color.blue()
-        )
-        
-        for i, r in enumerate(current[:10]):  # Show up to 10
-            embed.add_field(
-                name=f"Request #{i+1}",
-                value=f"User: {r['user_id']}\nRoute: {r['from_location']} → {r['to_location']}\nTime: {r['meetup_dt']}",
-                inline=False
-            )
-        
-        await ctx.send(embed=embed)
-    except Exception as e:
-        await ctx.send(f"❌ Error: {e}")
 
 @tasks.loop(minutes=3)
 async def cleanup_task():
@@ -1162,18 +1134,30 @@ async def create_channels_task():
                 
                 # Create channel with just 1 user
                 channel_name = build_channel_name(median_dt) + "-test"
-                overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+                # ✅ FIX: Start with empty overwrites, let category handle default permissions
+                overwrites = {}
+                
+                # Only add custom overwrites for members
                 for m in members:
                     overwrites[m] = discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True, read_message_history=True
+                        view_channel=True, 
+                        send_messages=True, 
+                        read_message_history=True
                     )
+                
                 try:
+                    # ✅ FIX: Create channel with category, but let category manage sync
                     ch = await guild.create_text_channel(
                         name=channel_name,
                         category=category if isinstance(category, discord.CategoryChannel) else None,
                         overwrites=overwrites,
                         reason="hailshare matched trio with per-user buffer"
                     )
+                    
+                    # ✅ FIX: Explicitly sync permissions with category if it exists
+                    if category and isinstance(category, discord.CategoryChannel):
+                        await ch.sync_permissions()
+                        print(f"[DEBUG] Synced permissions with category for {ch.name}")
             
                     greeting = (
                         "🚕 **Hailshare matched!**\n"
@@ -1247,10 +1231,15 @@ async def create_channels_task():
                     continue
             
                 channel_name = build_channel_name(median_dt)
-                overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+                # ✅ FIX: Start with empty overwrites, let category handle default permissions
+                overwrites = {}
+                
+                # Only add custom overwrites for members
                 for m in members:
                     overwrites[m] = discord.PermissionOverwrite(
-                        view_channel=True, send_messages=True, read_message_history=True
+                        view_channel=True, 
+                        send_messages=True, 
+                        read_message_history=True
                     )
             
                 try:
@@ -1260,6 +1249,11 @@ async def create_channels_task():
                         overwrites=overwrites,
                         reason="hailshare matched trio with per-user buffer"
                     )
+                    
+                    # ✅ FIX: Explicitly sync permissions with category if it exists
+                    if category and isinstance(category, discord.CategoryChannel):
+                        await ch.sync_permissions()
+                        print(f"[DEBUG] Synced permissions with category for {ch.name}")
             
                     greeting = (
                         "🚕 **Hailshare matched!**\n"
