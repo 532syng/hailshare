@@ -581,6 +581,16 @@ async def request_cmd(
         ephemeral=True
     )
 
+# test ! prefix command
+@bot.command(name='my_request')
+async def my_request(ctx):
+    if ctx.guild is None or ctx.guild.id != GUILD_ID:
+        await ctx.send("Use this command in the target server only.", mention_author=True)
+        return
+    r = db.latest_current_request(ctx.author.id)
+    if not r:
+        await ctx.send("You don't have any current request.", mention_author=True)
+        return
 
 @bot.tree.command(name="my_request", description="Show and optionally cancel your current request")
 async def my_request(interaction: discord.Interaction):
