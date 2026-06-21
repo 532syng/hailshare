@@ -1163,8 +1163,8 @@ async def create_channels_task():
                         "🚕 **Hailshare matched!**\n"
                         f"- Request date: {median_dt.strftime('%Y-%m-%d')}\n"
                         f"- Median time: {median_dt.strftime('%H:%M')} (UTC+7)\n"
-                        f"- From: {trio[0]['from_location']}\n"
-                        f"- To: {trio[0]['to_location']}\n"
+                        f"- From: {rows[0]['from_location']}\n"
+                        f"- To: {rows[0]['to_location']}\n"
                         "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decide to cancel, use /leave_trio.\n"
                         f"\nThis channel will be active until {MAX_BUFFER} minutes after the meetup time. After that, it may be deleted or archived.\n"
                     )
