@@ -1079,122 +1079,122 @@ async def fill_existing_channels_task():
         db.release_lock("matching_engine")
 
 
-    @tasks.loop(minutes=1)
-    async def create_channels_task():
-        await bot.wait_until_ready()
-        if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
+@tasks.loop(minutes=1)
+async def create_channels_task():
+    await bot.wait_until_ready()
+    if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
+        return
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
             return
-        try:
-            guild = bot.get_guild(GUILD_ID)
-            if not guild:
-                return
 
-            category = guild.get_channel(HAILSHARE_CATEGORY_ID) if HAILSHARE_CATEGORY_ID else None
+        category = guild.get_channel(HAILSHARE_CATEGORY_ID) if HAILSHARE_CATEGORY_ID else None
 
-            current = db.list_current_requests()
-            if not current:
-                return
+        current = db.list_current_requests()
+        if not current:
+            return
 
-            groups: Dict[Tuple[str, str], List[sqlite3.Row]] = {}
-            for r in current:
-                route_key = (r["from_location"], r["to_location"])
-                groups.setdefault(route_key, []).append(r)
+        groups: Dict[Tuple[str, str], List[sqlite3.Row]] = {}
+        for r in current:
+            route_key = (r["from_location"], r["to_location"])
+            groups.setdefault(route_key, []).append(r)
 
-            for key, rows in groups.items():
-                if len(rows) < 3:
+        for key, rows in groups.items():
+            if len(rows) < 3:
+                continue
+            rows = sorted(rows, key=lambda x: x["created_at"])
+            used = set()
+            for i in range(len(rows)):
+                if i in used:
                     continue
-                rows = sorted(rows, key=lambda x: x["created_at"])
-                used = set()
-                for i in range(len(rows)):
-                    if i in used:
+            
+                a = rows[i]
+                a_dt = datetime.fromisoformat(a["meetup_dt"])
+                a_buf = int(a["buffer_minutes"])
+            
+                found = None
+                for j in range(i + 1, len(rows)):
+                    if j in used:
                         continue
-                
-                    a = rows[i]
-                    a_dt = datetime.fromisoformat(a["meetup_dt"])
-                    a_buf = int(a["buffer_minutes"])
-                
-                    found = None
-                    for j in range(i + 1, len(rows)):
-                        if j in used:
+                    b = rows[j]
+                    b_dt = datetime.fromisoformat(b["meetup_dt"])
+                    b_buf = int(b["buffer_minutes"])
+            
+                    for k in range(j + 1, len(rows)):
+                        if k in used:
                             continue
-                        b = rows[j]
-                        b_dt = datetime.fromisoformat(b["meetup_dt"])
-                        b_buf = int(b["buffer_minutes"])
-                
-                        for k in range(j + 1, len(rows)):
-                            if k in used:
-                                continue
-                            c = rows[k]
-                            c_dt = datetime.fromisoformat(c["meetup_dt"])
-                            c_buf = int(c["buffer_minutes"])
-                
-                            dts = sorted([a_dt, b_dt, c_dt])
-                            median_dt = dts[1]
-                
-                            if not within_user_buffer(a_dt, median_dt, a_buf):
-                                continue
-                            if not within_user_buffer(b_dt, median_dt, b_buf):
-                                continue
-                            if not within_user_buffer(c_dt, median_dt, c_buf):
-                                continue
-                
-                            found = (j, k, median_dt)
-                            break
-                        if found:
-                            break
-                
-                    if not found:
-                        continue
-                
-                    j, k, median_dt = found
-                    trio = [a, rows[j], rows[k]]
-                    user_ids = [int(x["user_id"]) for x in trio]
-                
-                    if any([not await user_eligible_for_channel(guild, uid) for uid in user_ids]):
-                        continue
-                
-                    members = [guild.get_member(uid) for uid in user_ids]
-                    if any(m is None for m in members):
-                        continue
-                
-                    channel_name = build_channel_name(median_dt)
-                    overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
-                    for m in members:
-                        overwrites[m] = discord.PermissionOverwrite(
-                            view_channel=True, send_messages=True, read_message_history=True
-                        )
-                
-                    try:
-                        ch = await guild.create_text_channel(
-                            name=channel_name,
-                            category=category if isinstance(category, discord.CategoryChannel) else None,
-                            overwrites=overwrites,
-                            reason="hailshare matched trio with per-user buffer"
-                        )
-                
-                        greeting = (
-                            "🚕 **Hailshare matched!**\n"
-                            f"- Request date: {median_dt.strftime('%Y-%m-%d')}\n"
-                            f"- Median time: {median_dt.strftime('%H:%M')} (UTC+7)\n"
-                            f"- From: {trio[0]['from_location']}\n"
-                            f"- To: {trio[0]['to_location']}\n"
-                            "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decide to cancel, use /leave_trio.\n"
-                            f"\nThis channel will be active until {MAX_BUFFER} minutes after the meetup time. After that, it may be deleted or archived.\n"
-                        )
-                        await ch.send(greeting)
-                
-                        db.upsert_channel(ch.id, ch.name, median_dt, route_from=trio[0]['from_location'], route_to=trio[0]['to_location'])
-                        db.replace_channel_members(ch.id, user_ids)
-                        db.add_channel_event(ch.id, "create", user_ids)
-                
-                        for x in trio:
-                            db.set_matched(x["id"])
-                
-                        used.update({i, j, k})
-                
-                    except Exception as e:
-                        print(f"Error creating channel: {e}")
-                        continue
+                        c = rows[k]
+                        c_dt = datetime.fromisoformat(c["meetup_dt"])
+                        c_buf = int(c["buffer_minutes"])
+            
+                        dts = sorted([a_dt, b_dt, c_dt])
+                        median_dt = dts[1]
+            
+                        if not within_user_buffer(a_dt, median_dt, a_buf):
+                            continue
+                        if not within_user_buffer(b_dt, median_dt, b_buf):
+                            continue
+                        if not within_user_buffer(c_dt, median_dt, c_buf):
+                            continue
+            
+                        found = (j, k, median_dt)
+                        break
+                    if found:
+                        break
+            
+                if not found:
+                    continue
+            
+                j, k, median_dt = found
+                trio = [a, rows[j], rows[k]]
+                user_ids = [int(x["user_id"]) for x in trio]
+            
+                if any([not await user_eligible_for_channel(guild, uid) for uid in user_ids]):
+                    continue
+            
+                members = [guild.get_member(uid) for uid in user_ids]
+                if any(m is None for m in members):
+                    continue
+            
+                channel_name = build_channel_name(median_dt)
+                overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+                for m in members:
+                    overwrites[m] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, read_message_history=True
+                    )
+            
+                try:
+                    ch = await guild.create_text_channel(
+                        name=channel_name,
+                        category=category if isinstance(category, discord.CategoryChannel) else None,
+                        overwrites=overwrites,
+                        reason="hailshare matched trio with per-user buffer"
+                    )
+            
+                    greeting = (
+                        "🚕 **Hailshare matched!**\n"
+                        f"- Request date: {median_dt.strftime('%Y-%m-%d')}\n"
+                        f"- Median time: {median_dt.strftime('%H:%M')} (UTC+7)\n"
+                        f"- From: {trio[0]['from_location']}\n"
+                        f"- To: {trio[0]['to_location']}\n"
+                        "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decide to cancel, use /leave_trio.\n"
+                        f"\nThis channel will be active until {MAX_BUFFER} minutes after the meetup time. After that, it may be deleted or archived.\n"
+                    )
+                    await ch.send(greeting)
+            
+                    db.upsert_channel(ch.id, ch.name, median_dt, route_from=trio[0]['from_location'], route_to=trio[0]['to_location'])
+                    db.replace_channel_members(ch.id, user_ids)
+                    db.add_channel_event(ch.id, "create", user_ids)
+            
+                    for x in trio:
+                        db.set_matched(x["id"])
+            
+                    used.update({i, j, k})
+            
+                except Exception as e:
+                    print(f"Error creating channel: {e}")
+                    continue
     except Exception as e:
         print(f"Error: {e}")
     finally:
