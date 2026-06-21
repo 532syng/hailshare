@@ -980,7 +980,7 @@ async def leave_cmd(ctx: commands.Context):
 @bot.command(name='check_requests')
 async def check_requests(ctx):
     """Check current requests in database"""
-    if ctx.author.id != YOUR_ADMIN_ID:
+    if ctx.author.id != os.getenv("YOUR_ADMIN_ID", "0"):
         await ctx.send("❌ Admin only.")
         return
     
