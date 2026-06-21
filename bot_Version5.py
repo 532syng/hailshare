@@ -205,6 +205,8 @@ class DB:
             (str(user_id), meetup_dt.isoformat(), from_loc, to_loc, buffer, now, now),
         )
         self.conn.commit()
+        print(f"[DB] Inserted request for user {user_id}, row ID ", cur.lastrowid)
+        
 
     def cancel_request(self, request_id: int):
         self.conn.execute(
@@ -897,9 +899,22 @@ async def my_request(ctx):
         await ctx.send("Use this command in the target server only.", mention_author=True)
         return
     r = db.latest_current_request(ctx.author.id)
+    
     if not r:
         await ctx.send("You don't have any current request.", mention_author=True)
         return
+
+    # Create the view with confirmation buttons
+    view = CancelView(ctx.author.id, r["id"])        
+    # Send the confirmation message with the request details
+    embed = discord.Embed(
+        title="⚠️ Cancel Request",
+        description=f"{request_text(r)}\n\nDo you want to cancel it?",
+        color=discord.Color.orange()
+    )
+    embed.set_footer(text="Click Cancel to confirm, or click the X to dismiss.")
+        
+    await ctx.send(embed=embed, view=view)
 
 @bot.tree.command(name="my_request", description="Show and optionally cancel your current request")
 async def my_request(interaction: discord.Interaction):
