@@ -980,7 +980,7 @@ async def leave_cmd(ctx: commands.Context):
 
 @tasks.loop(minutes=3)
 async def cleanup_task():
-    print("cleanup_task triggered")
+    # print("cleanup_task triggered")
     await bot.wait_until_ready()
     db.cancel_past_current_requests()
 
@@ -1004,7 +1004,7 @@ async def cleanup_task():
 
 @tasks.loop(minutes=1)
 async def fill_existing_channels_task():
-    print("fill_existing_channels_task triggered")
+    # print("fill_existing_channels_task triggered")
     await bot.wait_until_ready()
     if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
         return
@@ -1098,7 +1098,7 @@ async def fill_existing_channels_task():
 
 @tasks.loop(minutes=1)
 async def create_channels_task():
-    print("create_channels_task triggered")
+    # print("create_channels_task triggered")
     await bot.wait_until_ready()
     if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
         return
@@ -1156,7 +1156,7 @@ async def create_channels_task():
                     
                     # ✅ FIX: Explicitly sync permissions with category if it exists
                     if category and isinstance(category, discord.CategoryChannel):
-                        await ch.sync_permissions()
+                        await ch.permissions_sync()
                         print(f"[DEBUG] Synced permissions with category for {ch.name}")
             
                     greeting = (
@@ -1252,7 +1252,7 @@ async def create_channels_task():
                     
                     # ✅ FIX: Explicitly sync permissions with category if it exists
                     if category and isinstance(category, discord.CategoryChannel):
-                        await ch.sync_permissions()
+                        await ch.permissions_sync()
                         print(f"[DEBUG] Synced permissions with category for {ch.name}")
             
                     greeting = (
