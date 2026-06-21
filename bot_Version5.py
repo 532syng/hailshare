@@ -205,7 +205,7 @@ class DB:
             (str(user_id), meetup_dt.isoformat(), from_loc, to_loc, buffer, now, now),
         )
         self.conn.commit()
-        print(f"[DB] Inserted request for user {user_id}, row ID ", cur.lastrowid)
+        print(f"[DB] Inserted request for user {user_id}")
         
 
     def cancel_request(self, request_id: int):
