@@ -177,6 +177,12 @@ class DB:
         self.conn.commit()
         return True
 
+    def release_lock(self, name: str) -> None:
+        """Release a lock"""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM locks WHERE name = ?", (name,))
+        self.conn.commit()
+
     # ---------- requests ----------
     def get_current_request_for_user(self, user_id: int) -> Optional[sqlite3.Row]:
         return self.conn.execute(
@@ -352,87 +358,6 @@ db = DB(DB_PATH)
 # =========================
 # HELPERS
 # =========================
-def check_database_setup(conn=db.conn):
-    """Verify the database and locks table are properly set up"""
-    try:
-        # conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # 1. Check if the locks table exists
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='locks'
-        """)
-        table_exists = cursor.fetchone() is not None
-        
-        if not table_exists:
-            print("❌ 'locks' table does NOT exist!")
-            return
-        
-        print("✅ 'locks' table exists.")
-        
-        # 2. Check the schema (columns)
-        cursor.execute("PRAGMA table_info(locks)")
-        columns = cursor.fetchall()
-        # columns format: [(cid, name, type, notnull, dflt_value, pk), ...]
-        
-        expected_columns = ['lock_name', 'acquired_at', 'expires_at']
-        actual_columns = [col[1] for col in columns]
-        
-        print(f"   Columns in 'locks' table: {actual_columns}")
-        
-        for expected in expected_columns:
-            if expected not in actual_columns:
-                print(f"   ❌ Missing column: {expected}")
-            else:
-                print(f"   ✅ Column '{expected}' exists.")
-        
-        # 3. Check current locks (if any)
-        cursor.execute("SELECT * FROM locks")
-        locks = cursor.fetchall()
-        print(f"   Current locks in database: {len(locks)}")
-        
-        if locks:
-            for lock in locks:
-                print(f"     - {lock}")
-        
-        # 4. Test if lock acquisition works
-        test_lock_name = "test_lock"
-        
-        # Clean up any existing test lock
-        cursor.execute("DELETE FROM locks WHERE lock_name = ?", (test_lock_name,))
-        conn.commit()
-        
-        # Try to acquire lock
-        cursor.execute("""
-            INSERT INTO locks (lock_name, expires_at) 
-            VALUES (?, datetime('now', '+10 seconds'))
-        """, (test_lock_name,))
-        conn.commit()
-        print("✅ Successfully acquired test lock.")
-        
-        # Try to acquire again (should fail)
-        try:
-            cursor.execute("""
-                INSERT INTO locks (lock_name, expires_at) 
-                VALUES (?, datetime('now', '+10 seconds'))
-            """, (test_lock_name,))
-            conn.commit()
-            print("⚠️  WARNING: Lock acquisition didn't fail - duplicate insert allowed!")
-        except sqlite3.IntegrityError:
-            print("✅ Duplicate lock prevented (IntegrityError raised).")
-        
-        # Clean up test lock
-        cursor.execute("DELETE FROM locks WHERE lock_name = ?", (test_lock_name,))
-        conn.commit()
-        print("✅ Test lock cleaned up.")
-        
-    except Exception as e:
-        print(f"❌ Error checking database: {e}")
-        import traceback
-        traceback.print_exc()
-    #finally:
-        #conn.close()
 
 def close_db_conn():
     """Properly close the database connection"""
@@ -963,6 +888,8 @@ async def request_cmd(ctx, meetup_date: str = None, meetup_time: str = None,
         print(f"Error in request command: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        db.release_lock("matching_engine")
     
 @bot.command(name='my_request')
 async def my_request(ctx):
@@ -1032,6 +959,9 @@ async def leave_cmd(ctx: commands.Context):
 
     except Exception as e:
         await ctx.send(f"Failed to leave channel: {e}")
+    finally:
+        db.release_lock("matching_engine")
+
 
 @tasks.loop(minutes=3)
 async def cleanup_task():
@@ -1061,206 +991,214 @@ async def fill_existing_channels_task():
     await bot.wait_until_ready()
     if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
         return
+    try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            return
 
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        return
-
-    for ch in guild.text_channels:
-        if not ch.name.startswith(CHANNEL_PREFIX):
-            continue
-
-        members = ch.members
-        if len(members) >= 3 or len(members) == 0:
-            continue
-
-        meetup = parse_channel_meetup(ch.name)
-        if meetup is None:
-            continue
-
-        route = db.get_channel_route(ch.id)
-        if route is None:
-            inferred = None
-            for m in members:
-                rr = db.conn.execute(
-                    """
-                    SELECT from_location, to_location
-                    FROM requests
-                    WHERE user_id=? AND status='matched'
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """,
-                    (str(m.id),),
-                ).fetchone()
-                if rr:
-                    inferred = (rr["from_location"], rr["to_location"])
-                    break
-            route = inferred
-
-        if route is None:
-            continue
-
-        route_from, route_to = route
-        candidates = db.list_current_requests()
-        existing_ids = {m.id for m in members}
-        selected = None
-
-        for r in candidates:
-            uid = int(r["user_id"])
-            if uid in existing_ids:
-                continue
-            if r["from_location"] != route_from or r["to_location"] != route_to:
-                continue
-            if not await user_eligible_for_channel(guild, uid):
+        for ch in guild.text_channels:
+            if not ch.name.startswith(CHANNEL_PREFIX):
                 continue
 
-            r_dt = datetime.fromisoformat(r["meetup_dt"])
-            if not within_user_buffer(r_dt, meetup, int(r["buffer_minutes"])):
+            members = ch.members
+            if len(members) >= 3 or len(members) == 0:
                 continue
 
-            selected = r
-            break
-
-        if not selected:
-            continue
-
-        member = guild.get_member(int(selected["user_id"]))
-        if not member:
-            continue
-
-        try:
-            await ch.set_permissions(
-                member,
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True
-            )
-            db.set_matched(selected["id"])
-
-            final_members = [m.id for m in ch.members]
-            db.upsert_channel(ch.id, ch.name, meetup, route_from=route_from, route_to=route_to)
-            db.sync_channel_members_incremental(ch.id, final_members)
-            db.add_channel_event(ch.id, "update", final_members)
-        except Exception:
-            continue
-
-
-@tasks.loop(minutes=1)
-async def create_channels_task():
-    await bot.wait_until_ready()
-    if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
-        return
-
-    guild = bot.get_guild(GUILD_ID)
-    if not guild:
-        return
-
-    category = guild.get_channel(HAILSHARE_CATEGORY_ID) if HAILSHARE_CATEGORY_ID else None
-
-    current = db.list_current_requests()
-    if not current:
-        return
-
-    groups: Dict[Tuple[str, str], List[sqlite3.Row]] = {}
-    for r in current:
-        route_key = (r["from_location"], r["to_location"])
-        groups.setdefault(route_key, []).append(r)
-
-    for key, rows in groups.items():
-        if len(rows) < 3:
-            continue
-        rows = sorted(rows, key=lambda x: x["created_at"])
-        used = set()
-        for i in range(len(rows)):
-            if i in used:
+            meetup = parse_channel_meetup(ch.name)
+            if meetup is None:
                 continue
-        
-            a = rows[i]
-            a_dt = datetime.fromisoformat(a["meetup_dt"])
-            a_buf = int(a["buffer_minutes"])
-        
-            found = None
-            for j in range(i + 1, len(rows)):
-                if j in used:
+
+            route = db.get_channel_route(ch.id)
+            if route is None:
+                inferred = None
+                for m in members:
+                    rr = db.conn.execute(
+                        """
+                        SELECT from_location, to_location
+                        FROM requests
+                        WHERE user_id=? AND status='matched'
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """,
+                        (str(m.id),),
+                    ).fetchone()
+                    if rr:
+                        inferred = (rr["from_location"], rr["to_location"])
+                        break
+                route = inferred
+
+            if route is None:
+                continue
+
+            route_from, route_to = route
+            candidates = db.list_current_requests()
+            existing_ids = {m.id for m in members}
+            selected = None
+
+            for r in candidates:
+                uid = int(r["user_id"])
+                if uid in existing_ids:
                     continue
-                b = rows[j]
-                b_dt = datetime.fromisoformat(b["meetup_dt"])
-                b_buf = int(b["buffer_minutes"])
-        
-                for k in range(j + 1, len(rows)):
-                    if k in used:
-                        continue
-                    c = rows[k]
-                    c_dt = datetime.fromisoformat(c["meetup_dt"])
-                    c_buf = int(c["buffer_minutes"])
-        
-                    dts = sorted([a_dt, b_dt, c_dt])
-                    median_dt = dts[1]
-        
-                    if not within_user_buffer(a_dt, median_dt, a_buf):
-                        continue
-                    if not within_user_buffer(b_dt, median_dt, b_buf):
-                        continue
-                    if not within_user_buffer(c_dt, median_dt, c_buf):
-                        continue
-        
-                    found = (j, k, median_dt)
-                    break
-                if found:
-                    break
-        
-            if not found:
+                if r["from_location"] != route_from or r["to_location"] != route_to:
+                    continue
+                if not await user_eligible_for_channel(guild, uid):
+                    continue
+
+                r_dt = datetime.fromisoformat(r["meetup_dt"])
+                if not within_user_buffer(r_dt, meetup, int(r["buffer_minutes"])):
+                    continue
+
+                selected = r
+                break
+
+            if not selected:
                 continue
-        
-            j, k, median_dt = found
-            trio = [a, rows[j], rows[k]]
-            user_ids = [int(x["user_id"]) for x in trio]
-        
-            if any([not await user_eligible_for_channel(guild, uid) for uid in user_ids]):
+
+            member = guild.get_member(int(selected["user_id"]))
+            if not member:
                 continue
-        
-            members = [guild.get_member(uid) for uid in user_ids]
-            if any(m is None for m in members):
-                continue
-        
-            channel_name = build_channel_name(median_dt)
-            overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
-            for m in members:
-                overwrites[m] = discord.PermissionOverwrite(
-                    view_channel=True, send_messages=True, read_message_history=True
-                )
-        
+
             try:
-                ch = await guild.create_text_channel(
-                    name=channel_name,
-                    category=category if isinstance(category, discord.CategoryChannel) else None,
-                    overwrites=overwrites,
-                    reason="hailshare matched trio with per-user buffer"
+                await ch.set_permissions(
+                    member,
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True
                 )
-        
-                greeting = (
-                    "🚕 **Hailshare matched!**\n"
-                    f"- Request date: {median_dt.strftime('%Y-%m-%d')}\n"
-                    f"- Median time: {median_dt.strftime('%H:%M')} (UTC+7)\n"
-                    f"- From: {trio[0]['from_location']}\n"
-                    f"- To: {trio[0]['to_location']}\n"
-                    "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decide to cancel, use /leave_trio.\n"
-                    f"\nThis channel will be active until {MAX_BUFFER} minutes after the meetup time. After that, it may be deleted or archived.\n"
-                )
-                await ch.send(greeting)
-        
-                db.upsert_channel(ch.id, ch.name, median_dt, route_from=trio[0]['from_location'], route_to=trio[0]['to_location'])
-                db.replace_channel_members(ch.id, user_ids)
-                db.add_channel_event(ch.id, "create", user_ids)
-        
-                for x in trio:
-                    db.set_matched(x["id"])
-        
-                used.update({i, j, k})
-        
-            except Exception as e:
-                print(f"Error creating channel: {e}")
+                db.set_matched(selected["id"])
+
+                final_members = [m.id for m in ch.members]
+                db.upsert_channel(ch.id, ch.name, meetup, route_from=route_from, route_to=route_to)
+                db.sync_channel_members_incremental(ch.id, final_members)
+                db.add_channel_event(ch.id, "update", final_members)
+            except Exception:
                 continue
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            db.release_lock("matching_engine")
+
+
+    @tasks.loop(minutes=1)
+    async def create_channels_task():
+        await bot.wait_until_ready()
+        if not db.try_acquire_lock("matching_engine", ttl_seconds=50):
+            return
+        try:
+        guild = bot.get_guild(GUILD_ID)
+        if not guild:
+            return
+
+        category = guild.get_channel(HAILSHARE_CATEGORY_ID) if HAILSHARE_CATEGORY_ID else None
+
+        current = db.list_current_requests()
+        if not current:
+            return
+
+        groups: Dict[Tuple[str, str], List[sqlite3.Row]] = {}
+        for r in current:
+            route_key = (r["from_location"], r["to_location"])
+            groups.setdefault(route_key, []).append(r)
+
+        for key, rows in groups.items():
+            if len(rows) < 3:
+                continue
+            rows = sorted(rows, key=lambda x: x["created_at"])
+            used = set()
+            for i in range(len(rows)):
+                if i in used:
+                    continue
+            
+                a = rows[i]
+                a_dt = datetime.fromisoformat(a["meetup_dt"])
+                a_buf = int(a["buffer_minutes"])
+            
+                found = None
+                for j in range(i + 1, len(rows)):
+                    if j in used:
+                        continue
+                    b = rows[j]
+                    b_dt = datetime.fromisoformat(b["meetup_dt"])
+                    b_buf = int(b["buffer_minutes"])
+            
+                    for k in range(j + 1, len(rows)):
+                        if k in used:
+                            continue
+                        c = rows[k]
+                        c_dt = datetime.fromisoformat(c["meetup_dt"])
+                        c_buf = int(c["buffer_minutes"])
+            
+                        dts = sorted([a_dt, b_dt, c_dt])
+                        median_dt = dts[1]
+            
+                        if not within_user_buffer(a_dt, median_dt, a_buf):
+                            continue
+                        if not within_user_buffer(b_dt, median_dt, b_buf):
+                            continue
+                        if not within_user_buffer(c_dt, median_dt, c_buf):
+                            continue
+            
+                        found = (j, k, median_dt)
+                        break
+                    if found:
+                        break
+            
+                if not found:
+                    continue
+            
+                j, k, median_dt = found
+                trio = [a, rows[j], rows[k]]
+                user_ids = [int(x["user_id"]) for x in trio]
+            
+                if any([not await user_eligible_for_channel(guild, uid) for uid in user_ids]):
+                    continue
+            
+                members = [guild.get_member(uid) for uid in user_ids]
+                if any(m is None for m in members):
+                    continue
+            
+                channel_name = build_channel_name(median_dt)
+                overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+                for m in members:
+                    overwrites[m] = discord.PermissionOverwrite(
+                        view_channel=True, send_messages=True, read_message_history=True
+                    )
+            
+                try:
+                    ch = await guild.create_text_channel(
+                        name=channel_name,
+                        category=category if isinstance(category, discord.CategoryChannel) else None,
+                        overwrites=overwrites,
+                        reason="hailshare matched trio with per-user buffer"
+                    )
+            
+                    greeting = (
+                        "🚕 **Hailshare matched!**\n"
+                        f"- Request date: {median_dt.strftime('%Y-%m-%d')}\n"
+                        f"- Median time: {median_dt.strftime('%H:%M')} (UTC+7)\n"
+                        f"- From: {trio[0]['from_location']}\n"
+                        f"- To: {trio[0]['to_location']}\n"
+                        "\nPlease coordinate your meetup in this private channel (e.g. exact meetup point, who does car-hailing and who pay by cash, how to recognize each other, etc.). Should you decide to cancel, use /leave_trio.\n"
+                        f"\nThis channel will be active until {MAX_BUFFER} minutes after the meetup time. After that, it may be deleted or archived.\n"
+                    )
+                    await ch.send(greeting)
+            
+                    db.upsert_channel(ch.id, ch.name, median_dt, route_from=trio[0]['from_location'], route_to=trio[0]['to_location'])
+                    db.replace_channel_members(ch.id, user_ids)
+                    db.add_channel_event(ch.id, "create", user_ids)
+            
+                    for x in trio:
+                        db.set_matched(x["id"])
+            
+                    used.update({i, j, k})
+            
+                except Exception as e:
+                    print(f"Error creating channel: {e}")
+                    continue
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        db.release_lock("matching_engine")
 
 
 @bot.event
@@ -1273,7 +1211,7 @@ async def on_ready():
             print(f"Synced slash commands to guild {GUILD_ID}")
         except Exception as e:
             print("Sync error:", e)
-    check_database_setup()
+    
     if not cleanup_task.is_running():
         cleanup_task.start()
     if not fill_existing_channels_task.is_running():
