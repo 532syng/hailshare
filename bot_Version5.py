@@ -977,6 +977,34 @@ async def leave_cmd(ctx: commands.Context):
     finally:
         db.release_lock("matching_engine")
 
+@bot.command(name='check_requests')
+async def check_requests(ctx):
+    """Check current requests in database"""
+    if ctx.author.id != YOUR_ADMIN_ID:
+        await ctx.send("❌ Admin only.")
+        return
+    
+    try:
+        current = db.list_current_requests()
+        if not current:
+            await ctx.send("📊 No current requests in database.")
+            return
+        
+        embed = discord.Embed(
+            title="📊 Current Requests",
+            color=discord.Color.blue()
+        )
+        
+        for i, r in enumerate(current[:10]):  # Show up to 10
+            embed.add_field(
+                name=f"Request #{i+1}",
+                value=f"User: {r['user_id']}\nRoute: {r['from_location']} → {r['to_location']}\nTime: {r['meetup_dt']}",
+                inline=False
+            )
+        
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"❌ Error: {e}")
 
 @tasks.loop(minutes=3)
 async def cleanup_task():
