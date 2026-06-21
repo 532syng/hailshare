@@ -12,6 +12,10 @@ from discord import app_commands
 from flask import Flask
 import time
 
+import atexit
+import signal
+import sys
+
 app = Flask('')
 
 @app.route('/')
@@ -348,6 +352,116 @@ db = DB(DB_PATH)
 # =========================
 # HELPERS
 # =========================
+def check_database_setup(conn=db.conn):
+    """Verify the database and locks table are properly set up"""
+    try:
+        # conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # 1. Check if the locks table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='locks'
+        """)
+        table_exists = cursor.fetchone() is not None
+        
+        if not table_exists:
+            print("❌ 'locks' table does NOT exist!")
+            return
+        
+        print("✅ 'locks' table exists.")
+        
+        # 2. Check the schema (columns)
+        cursor.execute("PRAGMA table_info(locks)")
+        columns = cursor.fetchall()
+        # columns format: [(cid, name, type, notnull, dflt_value, pk), ...]
+        
+        expected_columns = ['lock_name', 'acquired_at', 'expires_at']
+        actual_columns = [col[1] for col in columns]
+        
+        print(f"   Columns in 'locks' table: {actual_columns}")
+        
+        for expected in expected_columns:
+            if expected not in actual_columns:
+                print(f"   ❌ Missing column: {expected}")
+            else:
+                print(f"   ✅ Column '{expected}' exists.")
+        
+        # 3. Check current locks (if any)
+        cursor.execute("SELECT * FROM locks")
+        locks = cursor.fetchall()
+        print(f"   Current locks in database: {len(locks)}")
+        
+        if locks:
+            for lock in locks:
+                print(f"     - {lock}")
+        
+        # 4. Test if lock acquisition works
+        test_lock_name = "test_lock"
+        
+        # Clean up any existing test lock
+        cursor.execute("DELETE FROM locks WHERE lock_name = ?", (test_lock_name,))
+        conn.commit()
+        
+        # Try to acquire lock
+        cursor.execute("""
+            INSERT INTO locks (lock_name, expires_at) 
+            VALUES (?, datetime('now', '+10 seconds'))
+        """, (test_lock_name,))
+        conn.commit()
+        print("✅ Successfully acquired test lock.")
+        
+        # Try to acquire again (should fail)
+        try:
+            cursor.execute("""
+                INSERT INTO locks (lock_name, expires_at) 
+                VALUES (?, datetime('now', '+10 seconds'))
+            """, (test_lock_name,))
+            conn.commit()
+            print("⚠️  WARNING: Lock acquisition didn't fail - duplicate insert allowed!")
+        except sqlite3.IntegrityError:
+            print("✅ Duplicate lock prevented (IntegrityError raised).")
+        
+        # Clean up test lock
+        cursor.execute("DELETE FROM locks WHERE lock_name = ?", (test_lock_name,))
+        conn.commit()
+        print("✅ Test lock cleaned up.")
+        
+    except Exception as e:
+        print(f"❌ Error checking database: {e}")
+        import traceback
+        traceback.print_exc()
+    #finally:
+        #conn.close()
+
+def close_db_conn():
+    """Properly close the database connection"""
+    global db
+    if db and hasattr(db, 'conn'):
+        try:
+            db.conn.close()
+            print("[DB] Database connection closed successfully.")
+        except Exception as e:
+            print(f"[DB] Error closing database: {e}")
+
+def signal_handler(sig, frame):
+    """Handle termination signals"""
+    print(f"\n[SIGNAL] Received {sig}, initiating shutdown...")
+    close_db_conn()
+    sys.exit(0)
+
+def shutdown_bot():
+    """Complete shutdown routine"""
+    print("[SHUTDOWN] Starting shutdown...")
+    close_db_conn()
+    # Close any other resources here
+    print("[SHUTDOWN] Shutdown complete.")
+
+# Register cleanup handlers
+atexit.register(close_db_conn)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 def parse_meetup_dt(date_str: str, time_str: str) -> datetime:
     # input local UTC+7
     dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
@@ -1159,7 +1273,7 @@ async def on_ready():
             print(f"Synced slash commands to guild {GUILD_ID}")
         except Exception as e:
             print("Sync error:", e)
-
+    check_database_setup()
     if not cleanup_task.is_running():
         cleanup_task.start()
     if not fill_existing_channels_task.is_running():
@@ -1168,7 +1282,22 @@ async def on_ready():
         create_channels_task.start()
     keep_alive()
 
+@bot.event
+async def on_disconnect():
+    print("[BOT] Disconnected from Discord.")
 
+@bot.event
+async def on_close():
+    print("[BOT] Closing connection.")
+    close_db_conn()
+    
 if __name__ == "__main__":
-    #start_health_check()
-    bot.run(BOT_TOKEN)
+    try:
+        bot.run(BOT_TOKEN)
+    except KeyboardInterrupt:
+        print("\n[MAIN] Keyboard interrupt received.")
+    except Exception as e:
+        print(f"[MAIN] Fatal error: {e}")
+    finally:
+        print("[MAIN] Finally block - ensuring cleanup.")
+        close_db_conn()
